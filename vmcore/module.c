@@ -9,7 +9,7 @@
 #include <string.h>
 #include "port.h"
 #include "types.h"
-//#include "Flash.h"
+#include "utils.h"
 #include "NVMManager.h"
 
 // 在单条指令中，除了占一个字节的操作码之外，后面可能也会紧跟着立即数，如果有立即数，则直接跳过立即数
