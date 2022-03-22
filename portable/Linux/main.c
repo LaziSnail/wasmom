@@ -7,6 +7,17 @@
 #include "NVMManager.h"
 #include "port.h"
 #include "types.h"
+#include <stdarg.h>
+
+/*
+void DEBUG_PRINTF(char* fmt, ...){
+    va_list args;
+    va_start(args, fmt);
+    printf(fmt, ...);
+    va_end(args);
+    return;
+}*/
+
 
 extern uint8_t flash_buffer[];
 int main(int argc, char* argv[]){
@@ -30,22 +41,27 @@ int main(int argc, char* argv[]){
     buffer = malloc(fsize);
     fread(buffer,1,fsize,fp);
     
-    printf("Load %d bytes from file:",fsize);
-    for (i=0;i < fsize;i++){
-        printf("%x",buffer[i]);
-    }
-    printf("\r\n");
+    
 
     NVM_Format(0, 1024*256);
     NVM_Inti(0, 1024*256);
-    m = load_module(buffer,1);
-    tmp32 = NVM_Alloc(sizeof(Module));
-    printf("Alloc flash at address %x\r\n",tmp32);
-	FLA_WriteData(tmp32, m, sizeof(Module));
-	afree(m);
-	m = (Module *)tmp32;
-    
-    printf("Load module at flash:%p\r\n",m);
+    tmp32 = NVM_Alloc(fsize);
+    DEBUG_PRINTF("Alloc flash at address %x\r\n",tmp32);
+    DEBUG_PRINTF("address + len = %x\r\n",tmp32+fsize);
+    if (FLA_WriteData(tmp32, buffer, fsize) == 0){
+        DEBUG_PRINTF("FLA_WriteData failed!\r\n");
+    }
+
+    DEBUG_PRINTF("Load %d bytes from Flash:",fsize);
+    for (i=0;i < fsize;i++){
+        DEBUG_PRINTF("%x",FLA_read_u8(tmp32 + i));
+    }
+    DEBUG_PRINTF("\r\n");
+
+    m = load_module(tmp32,fsize);
+    //tmp32 = NVM_Alloc(sizeof(Module));
+	//FLA_WriteData(tmp32, m, sizeof(Module));
+    DEBUG_PRINTF("Load module at flash:%p\r\n",m);
 
     initStack();
 	Block *func = get_export(m, "add");
