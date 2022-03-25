@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "port.h"
 
 
 // 全局的异常信息，用于收集运行时（即虚拟机执行指令过程）中的异常信息
@@ -32,7 +33,7 @@ char exception[4096];
  * 针对有符号整数的 LEB128 编码，与上面无符号的完全相同，
  * 只有最后一个字节的第二高位是符号位，如果是 1，表示这是一个负数，需将高位全部补全为 1，如果是 0，表示这是一个正数，需将高位全部补全为 0
 */
-uint64_t read_LEB(const uint8_t *bytes, uint32_t *pos, uint32_t maxbits, bool sign) {
+uint64_t read_LEB(uint32_t bytes, uint32_t *pos, uint32_t maxbits, bool sign) {
     uint64_t result = 0;
     uint32_t shift = 0;
     uint32_t bcnt = 0;
@@ -40,7 +41,7 @@ uint64_t read_LEB(const uint8_t *bytes, uint32_t *pos, uint32_t maxbits, bool si
     uint64_t byte;
 
     while (true) {
-        byte = bytes[*pos];
+        byte = FLA_read_u8(bytes + *pos);//bytes[*pos];
         *pos += 1;
         // 取字节中后 7 位作为值插入到 result 中，按照小端序，即低位字节在前，高位字节在后
         result |= ((byte & 0x7f) << shift);
@@ -67,24 +68,25 @@ uint64_t read_LEB(const uint8_t *bytes, uint32_t *pos, uint32_t maxbits, bool si
 }
 
 // 解码针对无符号整数的 LEB128 编码
-uint64_t read_LEB_unsigned(const uint8_t *bytes, uint32_t *pos, uint32_t maxbits) {
+uint64_t read_LEB_unsigned(uint32_t bytes, uint32_t *pos, uint32_t maxbits) {
     return read_LEB(bytes, pos, maxbits, false);
 }
 
 // 解码针对有符号整数的 LEB128 编码
-uint64_t read_LEB_signed(const uint8_t *bytes, uint32_t *pos, uint32_t maxbits) {
+uint64_t read_LEB_signed(uint32_t bytes, uint32_t *pos, uint32_t maxbits) {
     return read_LEB(bytes, pos, maxbits, true);
 }
 
 // 从字节数组中读取字符串，其中字节数组的开头 4 个字节用于表示字符串的长度
 // 注：如果参数 result_len 不为 NULL，则会被赋值为字符串的长度
-char *read_string(const uint8_t *bytes, uint32_t *pos, uint32_t *result_len) {
+char *read_string(uint32_t bytes, uint32_t *pos, uint32_t *result_len) {
     // 读取字符串的长度
     uint32_t str_len = read_LEB_unsigned(bytes, pos, 32);
     // 为字符串申请内存
-    char *str = malloc(str_len + 1);
+    char *str = acalloc(str_len + 1, 1, "Nouse");
     // 将字节数组的数据拷贝到字符串 str 中
-    memcpy(str, bytes + *pos, str_len);
+    //memcpy(str, bytes + *pos, str_len);
+    FLA_readData(str, bytes + *pos, str_len);
     // 字符串以字符 '\0' 结尾
     str[str_len] = '\0';
     // 字节数组位置增加相应字符串长度
@@ -128,16 +130,21 @@ bool resolve_sym(char *filename, char *symbol, void **val, char **err) {
 }
 
 // 基于函数签名计算唯一的掩码值
-uint64_t get_type_mask(Type *type) {
+uint64_t get_type_mask(uint32_t type) {
     uint64_t mask = 0x80;
+    uint32_t result_addr;
+    result_addr = FLA_read_u32(type + TYPE_STRUCT_RESULT_ADDRESS_OFFSET);
 
-    if (type->result_count == 1) {
-        mask |= 0x80 - type->results[0];
+    //if (type->result_count == 1) {
+    if (FLA_read_u32(type + TYPE_STRUCT_RESULT_COUNT_OFFSET) == 1){
+        //mask |= 0x80 - type->results[0];
+        mask |= 0x80 - FLA_read_u32(result_addr);
     }
     mask = mask << 4;
-    for (uint32_t p = 0; p < type->param_count; p++) {
+    for (uint32_t p = 0; p < FLA_read_u32(type + TYPE_STRUCT_RESULT_COUNT_OFFSET); p++) {
         mask = ((uint64_t) mask) << 4;
-        mask |= 0x80 - type->params[p];
+        //mask |= 0x80 - type->params[p];
+        mask |= 0x80 - FLA_read_u32(result_addr + sizeof(uint32_t)*p);
     }
     return mask;
 }
@@ -152,19 +159,19 @@ Type block_types[5] = {
         },
         {
                 .result_count = 1,
-                .results = block_type_results[0],
+                .results = {I32},//(uint32_t)&block_type_results[0],
         },
         {
                 .result_count = 1,
-                .results = block_type_results[1],
+                .results = {I64},//(uint32_t)&block_type_results[1],
         },
         {
                 .result_count = 1,
-                .results = block_type_results[2],
+                .results = {F32},//(uint32_t)&block_type_results[2],
         },
         {
                 .result_count = 1,
-                .results = block_type_results[3],
+                .results = {F64},//(uint32_t)&block_type_results[3],
         }};
 
 // 根据表示该控制块的签名的值（占一个字节），返回控制块的签名，即控制块的返回值的数量和类型
@@ -311,15 +318,24 @@ char *value_repr(StackValue *v) {
 }
 
 // 通过名称从 Wasm 模块中查找同名的导出项
-void *get_export(Module *m, char *name) {
-    for (uint32_t e = 0; e < m->export_count; e++) {
-        char *export_name = m->exports[e].export_name;
-        if (!export_name) {
+//void *get_export(Module *m, char *name) {
+uint32_t get_export(uint32_t m, char* name){
+    uint32_t name_pos;
+    for (uint32_t e = 0; e < FLA_read_u32(m + MODULE_STRUCT_EXPORT_COUNT_OFFSET); e++) {
+        char *export_name; // = m->exports[e].export_name;
+        uint32_t tmpExp = FLA_read_u32(m + MODULE_STRUCT_EXPORT_ADDRESS_OFFSET);
+        tmpExp = FLA_read_u32(tmpExp + e*sizeof(uint32_t));
+        name_pos = FLA_read_u32(tmpExp + EXPORT_STRUCT_EXPORT_NAME_ADDRESS_OFFSET);
+        //if (!export_name) {
+        if (name_pos == 0){
             continue;
         }
-        if (strncmp(name, export_name, strlen(name)) == 0) {
-            return m->exports[e].value;
+        export_name = read_string(FLA_read_u32(m + MODULE_STRUCT_BYTE_ADDRESS_OFFSET), &name_pos, NULL);
+        if (strncmp(export_name, export_name, strlen(name)) == 0) {
+            afree(export_name);
+            return FLA_read_u32(tmpExp + EXPORT_STRUCT_EXPORT_NAME_ADDRESS_OFFSET);
         }
+        afree(export_name);
     }
     return NULL;
 }

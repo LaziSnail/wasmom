@@ -42,15 +42,37 @@ typedef enum {
     DataID   // 数据段 ID
 } SecID;
 
+#define TYPE_STRUCT_PARAM_COUNT_OFFSET                      0
+#define TYPE_STRUCT_PARAM_ADDRESS_OFFSET                    (TYPE_STRUCT_PARAM_COUNT_OFFSET + sizeof(uint32_t))
+#define TYPE_STRUCT_RESULT_COUNT_OFFSET                     (TYPE_STRUCT_PARAM_ADDRESS_OFFSET + sizeof(uint32_t))
+#define TYPE_STRUCT_RESULT_ADDRESS_OFFSET                   (TYPE_STRUCT_RESULT_COUNT_OFFSET + sizeof(uint32_t))
+#define TYPE_STRUCT_MASK_OFFSET                             (TYPE_STRUCT_RESULT_ADDRESS_OFFSET + sizeof(uint32_t))
+#define TYPE_STRUCT_SIZE                                    (TYPE_STRUCT_MASK_OFFSET + sizeof(uint64_t))
+
 // 控制块（包含函数）签名结构体
 // 注：目前多返回值提案还没有进入 Wasm 标准，根据当前版本的 Wasm 标准，非函数类型的控制块不能有参数，且最多只能有一个返回值
 typedef struct Type {
     uint32_t param_count; // 参数数量
-    uint32_t *params;     // 参数类型集合
+    uint32_t params;     // 参数类型集合 在Flash中的地址
     uint32_t result_count;// 返回值数量
-    uint32_t *results;    // 返回值类型集合
+    uint32_t results;    // 返回值类型集合 在Flash中的地址
     uint64_t mask;        // 基于控制块（包含函数）签名计算的唯一掩码值
 } Type;
+
+
+#define BLOCK_STRUCT_BLOCK_TYPE_OFFSET                      0
+#define BLOCK_STRUCT_TYPE_ADDRESS_OFFSET                    (BLOCK_STRUCT_BLOCK_TYPE_OFFSET + sizeof(uint8_t))
+#define BLOCK_STRUCT_FIDX_OFFSET                            (BLOCK_STRUCT_TYPE_ADDRESS_OFFSET + sizeof(uint32_t))
+#define BLOCK_STRUCT_LOCAL_COUNT_OFFSET                     (BLOCK_STRUCT_FIDX_OFFSET + sizeof(uint32_t))
+#define BLOCK_STRUCT_LOCAL_ADDRESS_OFFSET                   (BLOCK_STRUCT_LOCAL_COUNT_OFFSET + sizeof(uint32_t))        //指向local_count个uint32的數句，表示局部变量类型
+#define BLOCK_STRUCT_START_ADDRESS_OFFSET                   (BLOCK_STRUCT_LOCAL_ADDRESS_OFFSET + sizeof(uint32_t))
+#define BLOCK_STRUCT_END_ADDRESS_OFFSET                     (BLOCK_STRUCT_START_ADDRESS_OFFSET + sizeof(uint32_t))
+#define BLOCK_STRUCT_ELSE_ADDRESS_OFFSET                    (BLOCK_STRUCT_END_ADDRESS_OFFSET + sizeof(uint32_t))
+#define BLOCK_STRUCT_BR_ADDRESS_OFFSET                      (BLOCK_STRUCT_ELSE_ADDRESS_OFFSET + sizeof(uint32_t))
+#define BLOCK_STRUCT_IMPORT_MODULE_OFFSET                   (BLOCK_STRUCT_BR_ADDRESS_OFFSET + sizeof(uint32_t))
+#define BLOCK_STRUCT_IMPORT_FIELD_OFFSET                    (BLOCK_STRUCT_BR_ADDRESS_OFFSET + sizeof(char*))
+#define BLOCK_STRUCT_FUNC_PTR_OFFSET                        (BLOCK_STRUCT_IMPORT_FIELD_OFFSET + sizeof(char*))
+#define BLOCK_STRUCT_SIZE                                   (BLOCK_STRUCT_FUNC_PTR_OFFSET + sizeof(void *))
 
 // 控制块（包含函数）结构体
 typedef struct Block {
@@ -72,6 +94,13 @@ typedef struct Block {
     void *(*func_ptr)();// 导入函数的实际值（仅针对从外部模块导入的函数）
 } Block;
 
+#define TABLE_STRUCT_ELEM_TYPE_OFFSET           0
+#define TABLE_STRUCT_MIN_SIZE_OFFSET            (TABLE_STRUCT_ELEM_TYPE_OFFSET + sizeof(uint8_t))
+#define TABLE_STRUCT_MAX_SIZE_OFFSET            (TABLE_STRUCT_MIN_SIZE_OFFSET + sizeof(uint32_t))
+#define TABLE_STRUCT_CUR_SIZE_OFFSET            (TABLE_STRUCT_MAX_SIZE_OFFSET + sizeof(uint32_t))
+#define TABLE_STRUCT_ENTRIES_ADDRESS_OFFSET     (TABLE_STRUCT_CUR_SIZE_OFFSET + sizeof(uint32_t))
+#define TABLE_STRUCT_SIZE                       (TABLE_STRUCT_ENTRIES_ADDRESS_OFFSET + sizeof(uint32_t))
+
 // 表结构体
 typedef struct Table {
     uint8_t elem_type;// 表中元素的类型（必须为函数引用，编码为 0x70）
@@ -89,6 +118,10 @@ typedef struct Memory {
     uint8_t *bytes;   // 用于存储数据
 } Memory;
 
+#define EXPORT_STRUCT_EXPORT_NAME_ADDRESS_OFFSET                  0     //地址，指向字节码中name的长度位置(可以用readstring直接读的地方)
+#define EXPORT_STRUCT_EXTERNAL_KIND_OFFSET                        (EXPORT_STRUCT_EXPORT_NAME_ADDRESS_OFFSET + sizeof(uint32_t))
+#define EXPORT_STRUCT_VALUE_ADDRESS_OFFSET                        (EXPORT_STRUCT_EXTERNAL_KIND_OFFSET + sizeof(uint32_t))
+#define EXPORT_STRUCT_SIZE                                        (EXPORT_STRUCT_VALUE_ADDRESS_OFFSET + sizeof(uint32_t))
 // 导出项结构体
 typedef struct Export {
     char *export_name;     // 导出项成员名
@@ -134,7 +167,7 @@ typedef struct StackValue {
 
 // 栈帧结构体
 typedef struct Frame {
-    Block *block;// 栈帧对应的控制块（包含函数）结构体
+    uint32_t block;// 栈帧对应的控制块（包含函数）结构体
 
     // 下面三个属性是在该栈帧被压入调用栈顶时，保存的当时的运行时的状态，
     // 目的是为了在该栈帧关联的控制块执行完成，该栈帧弹出时，恢复压栈之前的运行时状态
@@ -147,17 +180,44 @@ typedef struct Frame {
                 // 注：该属性均针对类型为函数的控制块（只有函数执行完才会返回），其他类型的控制块没有该属性
 } Frame;
 
+uint32_t MODULE_getFunction(uint32_t m , uint32_t fidx);
+#define LOOKUP_TABLE_ITEM_POS               0
+#define LOOKUP_TABLE_ITEM_BLOCK             (LOOKUP_TABLE_ITEM_POS + sizeof(uint32_t))
+#define LOOKUP_TABLE_ITEM_SIZE              (LOOKUP_TABLE_ITEM_BLOCK + sizeof(uint32_t))
+
+
+#define MODULE_STRUCT_BYTE_ADDRESS_OFFSET                  0
+#define MODULE_STRUCT_BYTE_COUNT_OFFSET                     (MODULE_STRUCT_BYTE_ADDRESS_OFFSET + sizeof(uint32_t))
+#define MODULE_STRUCT_TYPE_ADDRESS_OFFSET                   (MODULE_STRUCT_BYTE_COUNT_OFFSET + sizeof(uint32_t))            //指向连续存放的一堆Type结构题
+#define MODULE_STRUCT_TYPE_COUNT_OFFSET                     (MODULE_STRUCT_TYPE_ADDRESS_OFFSET + sizeof(uint32_t))
+#define MODULE_STRUCT_IMPORT_FUNC_COUNT_OFFSET              (MODULE_STRUCT_TYPE_COUNT_OFFSET + sizeof(uint32_t))
+#define MODULE_STRUCT_FUNCTION_COUNT_OFFSET                 (MODULE_STRUCT_IMPORT_FUNC_COUNT_OFFSET + sizeof(uint32_t))
+#define MODULE_STRUCT_FUNCTION_ADDRESS_OFFSET               (MODULE_STRUCT_FUNCTION_COUNT_OFFSET + sizeof(uint32_t))            //存储的Flash地址指向一个Block地址列表
+#define MODULE_STRUCT_BLOCK_LOOKUP_ADDRESS_OFFSET           (MODULE_STRUCT_FUNCTION_ADDRESS_OFFSET + sizeof(uint32_t))          //指向一块空间，存储了pos-block的列表
+#define MODULE_STRUCT_BLOCK_LOOKUP_COUNT_OFFSET             (MODULE_STRUCT_BLOCK_LOOKUP_ADDRESS_OFFSET + sizeof(uint32_t))
+#define MODULE_STRUCT_TABLE_ADDRESS_OFFSET                  (MODULE_STRUCT_BLOCK_LOOKUP_COUNT_OFFSET + sizeof(uint32_t))      //指向一块空间，存着Table结构题，以后如果有多个table，就指向n个table结构题
+//Table 和 memory应该是在RAM中的变量，这里干掉
+#define MODULE_STRUCT_GLOBAL_VALUES_ADDRESS_OFFSET          (MODULE_STRUCT_TABLE_ADDRESS_OFFSET + sizeof(uint32_t))             //指向一块flash，存储全局变量的初始值，一共GLOBAL_COUNT个u32
+#define MODULE_STRUCT_GLOBAL_ADDRESS_OFFSET                 (MODULE_STRUCT_GLOBAL_VALUES_ADDRESS_OFFSET + sizeof(uint32_t))      //指向字节码中（bytes指针）global_count所在的地址
+#define MODULE_STRUCT_GLOBAL_COUNT_OFFSET                   (MODULE_STRUCT_GLOBAL_ADDRESS_OFFSET + sizeof(uint32_t))            //记录global的个数，包括includ的。
+#define MODULE_STRUCT_EXPORT_ADDRESS_OFFSET                 (MODULE_STRUCT_GLOBAL_COUNT_OFFSET + sizeof(uint32_t))              //存储的FLash地址指向一个Export地址列表
+#define MODULE_STRUCT_EXPORT_COUNT_OFFSET                   (MODULE_STRUCT_EXPORT_ADDRESS_OFFSET + sizeof(uint32_t))
+#define MODULE_STRUCT_START_FUNCTION_ADDRESS_OFFSET         (MODULE_STRUCT_EXPORT_COUNT_OFFSET + sizeof(uint32_t))
+#define MODULE_STRUCT_SIZE                                  (MODULE_STRUCT_START_FUNCTION_ADDRESS_OFFSET + sizeof(uint32_t))
 // Wasm 内存格式结构体
 typedef struct Module {
-    const uint8_t *bytes;// 用于存储 Wasm 二进制模块的内容
+    //const uint8_t *bytes;// 用于存储 Wasm 二进制模块的内容
+    uint32_t bytes;
     uint32_t byte_count; // Wasm 二进制模块的字节数
 
-    Type *types;        // 用于存储模块中所有函数签名
+    // Type *types;        // 用于存储模块中所有函数签名
+    uint32_t types;
     uint32_t type_count;// 模块中所有函数签名的数量
 
     uint32_t import_func_count;// 导入函数的数量
     uint32_t function_count;   // 所有函数的数量（包括导入函数）
     Block *functions;          // 用于存储模块中所有函数（包括导入函数和模块内定义函数）
+    //uint32_t 
     Block **block_lookup;      // 模块中所有 Block 的 map，其中 key 为为对应操作码 Block_/Loop/If 的地址
 
     Table table;// 表
@@ -183,6 +243,6 @@ typedef struct Module {
 } Module;
 
 // 解析 Wasm 二进制文件内容，将其转化成内存格式 Module
-struct Module *load_module(const uint8_t *bytes, uint32_t byte_count);
-
+uint32_t load_module(uint32_t bytes, const uint32_t byte_count);
+uint32_t MODULE_getBlockByPOS(uint32_t m , uint32_t pos);
 #endif

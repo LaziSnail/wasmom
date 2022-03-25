@@ -24,12 +24,13 @@ static uint32_t nvm_limit;
 int NVM_Inti(uint32_t baseAddress, uint32_t nvmSize){
     nvm_base = baseAddress;
     nvm_limit = baseAddress + nvmSize;
+    DEBUG_PRINTF("Head of flash:%02x %02x %02x %02x",FLA_read_u8(baseAddress),FLA_read_u8(baseAddress+1),FLA_read_u8(baseAddress+2),FLA_read_u8(baseAddress+3));
     return 0;
 }
 
 int NVM_Format(uint32_t baseAddress, uint32_t nvmSize){
     nvmSize = nvmSize&0x00FFFFFF;
-    FLA_write_u32(baseAddress, nvmSize);
+    FLA_write_u32(baseAddress, nvmSize-BLOCK_HEADER_SIZE);
     return 0;
 }
 
@@ -39,12 +40,15 @@ uint32_t NVM_Alloc(uint32_t size){
     uint32_t blocksize;
 
     if (size == 0){
+        printf("NVM_Alloc:Alloc for 0 size.\r\n");
     	return 0;
     }
     while(tmpaddr < nvm_limit){
+        //DEBUG_PRINTF("NVM_Alloc:Check Block at address:%x\r\n",tmpaddr);
         blocksize = FLA_read_u32(tmpaddr);
         blocktype = (blocksize&0xFF000000)>>24;
         blocksize = blocksize&0x00FFFFFF;
+        //DEBUG_PRINTF("NVM_Alloc:Block size is %x Block type is %x\r\n",blocksize,blocktype);
         if (blocktype == BTYPE_FREE){
             if (blocksize >= size + BLOCK_HEADER_SIZE){
                 FLA_write_u32(tmpaddr, blocksize - size - BLOCK_HEADER_SIZE);

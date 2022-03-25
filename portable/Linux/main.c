@@ -54,7 +54,7 @@ int main(int argc, char* argv[]){
 
     DEBUG_PRINTF("Load %d bytes from Flash:",fsize);
     for (i=0;i < fsize;i++){
-        DEBUG_PRINTF("%x",FLA_read_u8(tmp32 + i));
+        DEBUG_PRINTF("%02x",FLA_read_u8(tmp32 + i));
     }
     DEBUG_PRINTF("\r\n");
 
@@ -64,12 +64,12 @@ int main(int argc, char* argv[]){
     DEBUG_PRINTF("Load module at flash:%p\r\n",m);
 
     initStack();
-	Block *func = get_export(m, "add");
+	uint32_t tmpFunc = get_export(m, "add");
 	//pushStackU32(m, 20);
 	//pushStackU32(m, 24);
-	pushStack_u32(20);
+	pushStack_u32(21);
 	pushStack_u32(24);
-	res = invoke(m, func->fidx);
+	res = invoke(m, FLA_read_u32(tmpFunc + BLOCK_STRUCT_FIDX_OFFSET));
 	if (res) {
 		if (getCurrentSP() >= 0) {
 			printf("func return:%d\n", popStack_u32());

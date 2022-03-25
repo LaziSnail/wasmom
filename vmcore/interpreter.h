@@ -15,7 +15,7 @@ void setup_call(Module *m, uint32_t fidx);
 bool interpret(Module *m);
 
 // 调用索引为 fidx 的函数
-bool invoke(Module *m, uint32_t fidx);
+bool invoke(uint32_t m, uint32_t fidx);
 
 // 计算初始化表达式
 // 参数 type 为初始化表达式的返回值类型

@@ -8,8 +8,31 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include "port.h"
 
+
+#define MAX_MEMORY_SIZE         2048
 static uint32_t pc;//PC 是指向要取的字节码的物理地址
+
+static uint32_t global_values[100];
+static uint32_t global_count;
+static uint8_t memory_bufer[MAX_MEMORY_SIZE];
+static uint32_t memory_cur_size;
+
+void initGlobalValues(uint32_t m){
+    uint32_t gAddr;
+    uint32_t cnt;
+    uint32_t i;
+
+    gAddr = FLA_read_u32(m + MODULE_STRUCT_GLOBAL_VALUES_ADDRESS_OFFSET);
+    cnt = FLA_read_u32(m + MODULE_STRUCT_GLOBAL_COUNT_OFFSET);
+
+    for (i=0;i<cnt;i++){
+        global_values[i] = FLA_read_u32(gAddr + i*sizeof(uint32_t));
+    }
+
+    return;
+}
 
 
 uint32_t getCurrentPC() {
@@ -21,17 +44,20 @@ void setCurrentPC(uint32_t p) {
 }
 
 uint8_t readOpCode(void) {
-    return *(uint8_t *) pc++;
+    //return *(uint8_t *) pc++;
+    return FLA_read_u8(pc++);
 }
 
 static uint64_t
-read_leb(const uint8_t *buf, uint32_t *p_offset, uint32_t maxbits, bool sign) {
+read_leb(const uint32_t addr, uint32_t *p_offset, uint32_t maxbits, bool sign) {
     uint64_t result = 0, byte;
     uint32_t offset = *p_offset;
     uint32_t shift = 0;
 
     while (true) {
-        byte = buf[offset++];
+        //byte = buf[offset++];
+        byte = FLA_read_u8(addr + offset);
+        offset++;
         result |= ((byte & 0x7f) << shift);
         shift += 7;
         if ((byte & 0x80) == 0) {
@@ -49,7 +75,7 @@ read_leb(const uint8_t *buf, uint32_t *p_offset, uint32_t maxbits, bool sign) {
 uint32_t readPC_LEB_u32(void) {
     uint32_t res = 0;
     uint32_t off = 0;
-    uint8_t val = *(uint8_t *) pc;
+    uint8_t val = FLA_read_u8(pc);
     if (!(val & 0x80)) {
         res = val;
         pc++;
@@ -63,7 +89,7 @@ uint32_t readPC_LEB_u32(void) {
 uint8_t readPC_LEB_u8(void) {
     uint8_t res = 0;
     uint32_t off = 0;
-    uint8_t val = *(uint8_t *) pc;
+    uint8_t val = FLA_read_u8(pc);
     if (!(val & 0x80)) {
         res = val;
         pc++;
@@ -73,21 +99,31 @@ uint8_t readPC_LEB_u8(void) {
     }
     return res;
 }
-bool run(Module *m);
+bool run(uint32_t m);
 // 调用索引为 fidx 的函数
-bool invoke(Module *m, uint32_t fidx) {
+bool invoke(uint32_t m, uint32_t fidx) {
     bool result;
-    Block* block;
+    //Block* block;
+    uint32_t mbytes;
+    uint32_t tmpBlock;
 
     // 调用函数前的设置，主要设置内容如下：
     // 1. 将当前函数关联的栈帧压入到调用栈顶成为当前栈帧，同时保存该栈帧被压入调用栈顶前的运行时状态，例如 sp fp ra 等
     // 2. 将当前函数的局部变量压入到操作数栈顶（默认初始值为 0）
     // 3. 将函数的字节码部分的【起始地址】设置为 pc（即下一条待执行指令的地址），即开始执行函数字节码中的指令流
     //setup_call(m, fidx);
-    block = &m->functions[fidx];
-    pushFrame(block);
-    setCurrentPC((uint32_t)m->bytes + block->start_addr);
+    //block = &m->functions[fidx];
+    DEBUG_PRINTF("Invoke function id=%d of module at address %x\r\n",fidx, m);
+    tmpBlock = MODULE_getFunction(m, fidx);
+    DEBUG_PRINTF("Function is located at address %x\r\n",tmpBlock);
+    pushFrame(tmpBlock);
 
+    mbytes = FLA_read_u32(m + MODULE_STRUCT_BYTE_ADDRESS_OFFSET);
+
+    setCurrentPC((uint32_t)mbytes + FLA_read_u32(tmpBlock + BLOCK_STRUCT_START_ADDRESS_OFFSET));
+    DEBUG_PRINTF("PC is set to %x\r\n",getCurrentPC());
+    initGlobalValues(m);
+    DEBUG_PRINTF("Ready to Run!\r\n");
     // 虚拟机执行起始函数的字节码中的指令流
     result = run(m);//interpret(m);
 
@@ -97,12 +133,14 @@ bool invoke(Module *m, uint32_t fidx) {
 }
 
 // 虚拟机执行字节码中的指令流
-bool run(Module *m) {
-    const uint8_t *bytes = m->bytes;// Wasm 二进制内容
+bool run(uint32_t m) {
+    //const uint8_t *bytes = m->bytes;// Wasm 二进制内容
+    uint32_t mbytes;
     //StackValue *stack = m->stack;   // 操作数栈
     uint8_t opcode;                 // 操作码
     uint32_t cur_pc;                // 当前的程序计数器（即下一条即将执行的指令的地址）
-    Block *block;                   // 控制块
+    //Block *block;                   // 控制块
+    uint32_t tmpBlock;
     uint8_t value_type;             // 控制块返回值的类型（根据当前版本的 Wasm 标准，控制块不能有参数，且最多只能有一个返回值）
     uint32_t cond;                  // 保存在操作数栈顶的判断条件的值
     uint32_t depth;                 // 跳转指令的目标标签索引
@@ -118,12 +156,13 @@ bool run(Module *m) {
     float tmpf32 = 0;
     float g, h, i;                  // 用于 F32 数值计算
     //double j, k, l;                 // 用于 F64 数值计算
-
+ 
+    mbytes = FLA_read_u32(m + MODULE_STRUCT_BYTE_ADDRESS_OFFSET);
     //while (pc <  m->byte_count) {
     while (1) {
         cur_pc = getCurrentPC();// 保存程序计数器的值（即下一条即将执行的指令的地址）
         opcode = readOpCode();  // 读取指令中的操作码,pc自加
-
+        DEBUG_PRINTF("OP code:%02X\r\n",opcode);
         switch (opcode) {
             /*```
              * 控制指令--其他指令（2 条）
@@ -159,12 +198,13 @@ bool run(Module *m) {
 
                 // 在 block_lookup 中根据 Loop/Block_ 操作码的地址查找对应的控制块
                 // 注：block_lookup 索引就是控制块的起始地址，而控制块就是以 Block_/Loop/If 操作码为开头
-                block = m->block_lookup[cur_pc];
+                //block = m->block_lookup[cur_pc];
+                tmpBlock = MODULE_getBlockByPOS(m, cur_pc);
 
                 // 控制块（包含函数）被调用前，将【待调用的控制块（包含函数）关联的栈帧】压入到调用栈顶，成为当前栈帧，
                 // 同时保存该栈帧被压入调用栈顶前的运行时状态，例如 sp fp ra 等
                 //push_block(m, block, m->sp);
-                pushFrame(block);
+                pushFrame(tmpBlock);
                 continue;
             case If:
                 // 指令作用：将当前控制块（if 类型）关联的栈帧压入到调用栈顶，成为当前栈帧
@@ -183,12 +223,12 @@ bool run(Module *m) {
 
                 // 在 block_lookup 中根据 If 操作码的地址查找对应的控制块
                 // 注：block_lookup 索引就是控制块的起始地址，而控制块就是以 Block_/Loop/If 操作码为开头
-                block = m->block_lookup[cur_pc];
-
+                //block = m->block_lookup[cur_pc];
+                tmpBlock = MODULE_getBlockByPOS(m, cur_pc);
                 // 控制块（包含函数）被调用前，将【待调用的控制块（包含函数）关联的栈帧】压入到调用栈顶，成为当前栈帧，
                 // 同时保存该栈帧被压入调用栈顶前的运行时状态，例如 sp fp ra 等
                 //push_block(m, block, m->sp);
-                pushFrame(block);
+                pushFrame(tmpBlock);
 
                 // 从操作数栈顶获取判断条件的值
                 // 注：在调用 If 指令时，操作数栈顶保存的就是判断条件的值
@@ -197,10 +237,11 @@ bool run(Module *m) {
                 // 如果判断条件为 false，则将程序计数器 pc 设置为 else 控制块首地址或 if 控制块结尾地址，
                 // 即跳过 if 分支的代码对应的指令，执行后面的指令
                 if (cond == 0) {
-                    if (block->else_addr == 0) {
+                    //if (block->else_addr == 0) {
+                    if (FLA_read_u32(tmpBlock + BLOCK_STRUCT_ELSE_ADDRESS_OFFSET) == 0) {
                         // 如果不存在 else 分支，则跳转到 if 控制块结尾的下一条指令继续执行
                         //m->pc = block->br_addr + 1;
-                        setCurrentPC((uint32_t) bytes + block->br_addr + 1);
+                        setCurrentPC((uint32_t) mbytes + FLA_read_u32(tmpBlock + BLOCK_STRUCT_BR_ADDRESS_OFFSET) + 1);
                         // 在上面的 push_block 函数中 if 控制块对应的栈帧已经被压入到调用栈且调用栈顶索引 csp 加 1，
                         // 此时不需要执行 if 控制块的指令，所以调用栈顶索引需要减 1
                         //m->csp -= 1;
@@ -208,7 +249,8 @@ bool run(Module *m) {
                     } else {
                         // 如果存在 else 分支，则执行 else 分支代码对应的字节码的起始指令，也是 Else_ 指令的下一条指令
                         //m->pc = block->else_addr;
-                        setCurrentPC((uint32_t) bytes + block->else_addr);
+                        //setCurrentPC((uint32_t) bytes + block->else_addr);
+                        setCurrentPC((uint32_t) mbytes + FLA_read_u32(tmpBlock + BLOCK_STRUCT_ELSE_ADDRESS_OFFSET));
                     }
                 }
                 continue;
@@ -222,12 +264,12 @@ bool run(Module *m) {
 
                 // 获取当前栈帧对应的控制块
                 //block = m->callstack[m->csp].block;
-            	block = getCurrentFrame()->block;
+            	tmpBlock = getCurrentFrame()->block;
                 // 跳转到控制块的结尾指令继续执行
                 // 注：当上一个分支对应的指令流执行完成后，会执行到 Else_ 指令，则需要跳过 Else_ 指令后面的 else 分支对应的指令流，
                 // 直接执行控制块的结尾指令，可以看出 Else_ 指令起到了分隔多个分支对应的指令流的作用
                 //m->pc = block->br_addr;
-                setCurrentPC((uint32_t) bytes + block->br_addr);
+                setCurrentPC((uint32_t) mbytes + FLA_read_u32(tmpBlock + BLOCK_STRUCT_BR_ADDRESS_OFFSET));
                 continue;
             case End_:
                 // 指令作用：控制块执行结束后，将关联的当前栈帧从调用栈顶中弹出，并根据具体情况决定是否退出虚拟机的执行
@@ -235,21 +277,22 @@ bool run(Module *m) {
                 // 当前控制块（包含函数）执行结束后，将关联的当前栈帧从调用栈顶中弹出，
                 // 同时恢复该栈帧被压入调用栈顶前的运行时状态，例如 sp fp ra 等
                 //block = pop_block(m);
-                block = popFrame();
+                tmpBlock = popFrame();
 
                 // 如果 pop_block 函数返回 NULL，则说明有异常（具体逻辑可查看 pop_block 函数），
                 // 则直接返回 false 退出虚拟机执行
-                if (block == NULL) {
+                if (tmpBlock == NULL) {
                     return false;
                 }
 
-                if (block->block_type == 0x00) {
+                //if (block->block_type == 0x00) {
+                if (FLA_read_u8(tmpBlock + BLOCK_STRUCT_BLOCK_TYPE_OFFSET) == 0){
                     // 1. 当控制块类型为函数时，且调用栈为空（即 csp 为 -1），说明已经执行完顶层的控制块，
                     // 则直接返回 true 退出虚拟机执行，否则继续执行下一条指令
                     if (getCurrentCSP() == -1) {
                         return true;
                     }
-                } else if (block->block_type == 0x01) {
+                } else if (FLA_read_u8(tmpBlock + BLOCK_STRUCT_BLOCK_TYPE_OFFSET) == 0x01) {
                     // 2. 当控制块类型为初始化表达式时，说明只有一层控制块调用，则直接返回 true 退出虚拟机执行即可
                     return true;
                 }
@@ -269,10 +312,10 @@ bool run(Module *m) {
                 depth = readPC_LEB_u32();//read_LEB_unsigned(bytes, &m->pc, 32);
                 // 将目标控制块关联的栈帧设置为当前栈帧
                 //m->csp -= (int) depth;
-                block = popOnlyCSP(depth);
+                tmpBlock = popOnlyCSP(depth);
                 // 跳转到目标控制块的跳转地址继续执行后面的指令
                 //m->pc = m->callstack[m->csp].block->br_addr;
-                setCurrentPC((uint32_t) bytes + block->br_addr);
+                setCurrentPC((uint32_t) mbytes + FLA_read_u32(tmpBlock + BLOCK_STRUCT_BR_ADDRESS_OFFSET));
                 continue;
             case BrIf:
                 // 指令作用：根据判断条件决定是否跳转到目标控制块的跳转地址继续执行后面的指令
@@ -288,10 +331,10 @@ bool run(Module *m) {
                 if (cond) {
                     // 将目标控制块关联的栈帧设置为当前栈帧
                     //m->csp -= (int) depth;
-                    block = popOnlyCSP(depth);
+                    tmpBlock = popOnlyCSP(depth);
                     // 跳转到目标控制块的跳转地址继续执行后面的指令
                     //m->pc = m->callstack[m->csp].block->br_addr;
-                    setCurrentPC((uint32_t) bytes + block->br_addr);
+                    setCurrentPC((uint32_t) mbytes + FLA_read_u32(tmpBlock + BLOCK_STRUCT_BR_ADDRESS_OFFSET));
                 }
                 continue;
             case BrTable: {
@@ -342,13 +385,13 @@ bool run(Module *m) {
                 // 将目标控制块关联的栈帧设置为当前栈帧
                 //m->csp -= (int) depth;
                 if (a == 1){
-                    block = popOnlyCSP(depth);
+                    tmpBlock = popOnlyCSP(depth);
                 }else{
-                    block = popOnlyCSP(defaultDepth);
+                    tmpBlock = popOnlyCSP(defaultDepth);
                 }
                 // 跳转到目标控制块的跳转地址继续执行后面的指令
                 //m->pc = m->callstack[m->csp].block->br_addr;
-                setCurrentPC((uint32_t) bytes + block->br_addr);
+                setCurrentPC((uint32_t) mbytes+ FLA_read_u32(tmpBlock + BLOCK_STRUCT_BR_ADDRESS_OFFSET));
                 continue;
             }
             case Return:
@@ -360,12 +403,12 @@ bool run(Module *m) {
                     m->csp--;
                 }*/
                 do {
-                    block = popOnlyCSP(1);
-                } while ((block != NULL) && (block->block_type != 0x00));
+                    tmpBlock = popOnlyCSP(1);
+                } while ((tmpBlock != NULL) && (FLA_read_u8(tmpBlock + BLOCK_STRUCT_BLOCK_TYPE_OFFSET) != 0x00));
                 // 直接跳到当前函数对应的控制块结尾处，即 End_ 指令处并执行该指令
                 // 对应的当前栈帧弹出调用栈和退出虚拟机执行 是在 End_ 指令执行逻辑中
                 //m->pc = m->callstack[m->csp].block->end_addr;
-                setCurrentPC((uint32_t) bytes + block->br_addr);
+                setCurrentPC((uint32_t) mbytes+ FLA_read_u32(tmpBlock + BLOCK_STRUCT_BR_ADDRESS_OFFSET));
                 continue;
 
             /*
@@ -380,7 +423,8 @@ bool run(Module *m) {
 
                 // 如果函数索引值小于 m->import_func_count，则说明该函数为外部函数
                 // 原因：在解析 Wasm 二进制文件内容时，首先解析导入段中的函数到 m->functions，然后再解析函数段中的函数到 m->functions
-                if (fidx < m->import_func_count) {
+                //if (fidx < m->import_func_count) {
+                if (fidx < FLA_read_u32(m + MODULE_STRUCT_IMPORT_FUNC_COUNT_OFFSET)){
                     // TODO: 暂时忽略调用外部引入函数情况
                 } else {
                     // 如果调用栈溢出，则记录异常信息并返回 false 退出虚拟机执行
@@ -395,9 +439,11 @@ bool run(Module *m) {
                     // 2. 将当前函数的局部变量压入到操作数栈顶（默认初始值为 0）
                     // 3. 将函数的字节码部分的【起始地址】设置为 pc（即下一条待执行指令的地址），即开始执行函数字节码中的指令流
                     //setup_call(m, fidx);
-                    block = &m->functions[fidx];
-                    pushFrame(block);
-                    setCurrentPC((uint32_t) bytes + block->start_addr);
+                    //block = &m->functions[fidx];
+                    tmpBlock = MODULE_getFunction(m, fidx);
+                    pushFrame(tmpBlock);
+                    //setCurrentPC((uint32_t) bytes + block->start_addr);
+                    setCurrentPC((uint32_t) mbytes + FLA_read_u32(tmpBlock + BLOCK_STRUCT_START_ADDRESS_OFFSET));
                 }
                 continue;
             case CallIndirect: {
@@ -407,30 +453,38 @@ bool run(Module *m) {
 
                 // 第一个立即数表示被调用函数的类型索引（占 4 个字节）
                 uint32_t tidx = readPC_LEB_u32();//read_LEB_unsigned(bytes, &m->pc, 32);
-
+                uint32_t tmpTable;
+                tmpTable = FLA_read_u32(m + MODULE_STRUCT_TABLE_ADDRESS_OFFSET);
                 // 第二个立即数为保留立即数（占 1 个比特位）
                 readPC_LEB_u32();//read_LEB_unsigned(bytes, &m->pc, 1);
 
                 // 操作数栈顶保存的值是【函数索引值】在表 table 中的索引
                 uint32_t val = popStack_u32();//stack[m->sp--].value.uint32;
                 // 如果该值大于或等于表 table 的最大值，则记录异常信息并返回 false 退出虚拟机执行
-                if (val >= m->table.max_size) {
-                    sprintf(exception, "undefined element 0x%x (max: 0x%x) in table", val, m->table.max_size);
+                //if (val >= m->table.max_size) {
+                if (val >= FLA_read_u32(tmpTable + TABLE_STRUCT_MAX_SIZE_OFFSET)){
+                    sprintf(exception, "undefined element 0x%x (max: 0x%x) in table", val, FLA_read_u32(tmpTable + TABLE_STRUCT_MAX_SIZE_OFFSET));
                     return false;
                 }
 
                 // 从表 table 中读取【函数索引值】
-                fidx = m->table.entries[val];
+                //fidx = m->table.entries[val];
+                tmpu32 = FLA_read_u32(tmpTable + TABLE_STRUCT_ENTRIES_ADDRESS_OFFSET);
+                fidx = FLA_read_u32(tmpu32 + val*sizeof(uint32_t));
 
                 // 如果函数索引值小于 m->import_func_count，则说明该函数为外部函数
                 // 原因：在解析 Wasm 二进制文件内容到内存时，是先解析导入段中的函数到 m->functions，然后再解析函数段中的函数到 m->functions
-                if (fidx < m->import_func_count) {
+                //if (fidx < m->import_func_count) {
+                if (fidx < FLA_read_u32(m + MODULE_STRUCT_IMPORT_FUNC_COUNT_OFFSET)){
                     // TODO: 暂时忽略调用外部引入函数情况
                 } else {
                     // 通过函数索引获取到函数
-                    Block *func = &m->functions[fidx];
+                    //Block *func = &m->functions[fidx];
+                    uint32_t tmpFunc = MODULE_getFunction(m, fidx);
                     // 获取函数签名
-                    Type *ftype = func->type;
+                    //Type *ftype = func->type;
+                    uint32_t tmpType;
+                    tmpType =FLA_read_u32(tmpFunc + BLOCK_STRUCT_TYPE_ADDRESS_OFFSET);
 
                     // 如果调用栈溢出，则记录异常信息并返回 false 退出虚拟机执行
                     /*
@@ -441,7 +495,9 @@ bool run(Module *m) {
 
                     // 如果【实际函数类型】和【指令立即数中对应的函数类型】不相同，
                     // 则记录异常信息并返回 false 退出虚拟机执行
-                    if (ftype->mask != m->types[tidx].mask) {
+                    //if (ftype->mask != m->types[tidx].mask) {
+                    tmpu32 = FLA_read_u32(m + MODULE_STRUCT_TYPE_ADDRESS_OFFSET) + tidx*TYPE_STRUCT_SIZE;
+                    if (FLA_read_u32(tmpType + TYPE_STRUCT_MASK_OFFSET) != FLA_read_u32(tmpu32 + TYPE_STRUCT_MASK_OFFSET)){
                         sprintf(exception, "indirect call type mismatch (call type and function type differ)");
                         return false;
                     }
@@ -451,8 +507,8 @@ bool run(Module *m) {
                     // 2. 将当前函数的局部变量压入到操作数栈顶（默认初始值为 0）
                     // 3. 将函数的字节码部分的【起始地址】设置为 pc（即下一条待执行指令的地址），即开始执行函数字节码中的指令流
                     //setup_call(m, fidx);
-                    pushFrame(func);
-                    setCurrentPC((uint32_t) bytes + func->start_addr);
+                    pushFrame(tmpFunc);
+                    setCurrentPC((uint32_t) mbytes + FLA_read_u32(tmpFunc + BLOCK_STRUCT_START_ADDRESS_OFFSET));
 
                     // 由于 setup_call 函数中会将函数参数和局部变量压入操作数栈，
                     // 所以可以校验【函数签名中声明的参数数量+函数局部变量数量】和【压入操作数栈的函数参数和局部变量总数】是否相等，
@@ -518,10 +574,10 @@ bool run(Module *m) {
              * */
             case LocalGet:
                 // 指令作用：将指定局部变量压入到操作数栈顶
-
+                DEBUG_PRINTF("LocalGet\r\n");
                 // 该指令的立即数为局部变量的索引
                 idx = readPC_LEB_u32();//read_LEB_unsigned(bytes, &m->pc, 32);
-
+                DEBUG_PRINTF("Local index is %d\r\n",idx);
                 // 将指定局部变量的值压入到操作数栈顶
                 //stack[++m->sp] = stack[m->fp + idx];
                 //pushStack_u32(getLocal(idx));
@@ -563,7 +619,8 @@ bool run(Module *m) {
                 // 将指定局部变量的值压入到操作数栈顶
                 //stack[++m->sp] = m->globals[idx];
                 //这里以后重新实现了global相关逻辑后肯定需要重写，目前只能支持u32的global by ljp
-                pushStack_u32(m->globals[idx].value.uint32);
+                //pushStack_u32(m->globals[idx].value.uint32);
+                pushStack_u32(global_values[idx]);
                 continue;
             case GlobalSet:
                 // 指令作用：操作数栈顶的值弹出并保存到指定全局变量中
@@ -574,8 +631,9 @@ bool run(Module *m) {
                 // 弹出操作数栈顶的值，将其保存到指定全局变量中
                 //m->globals[idx] = stack[m->sp--];
                 //这里以后重新实现了global相关逻辑后肯定需要重写，目前只能支持u32的global by ljp
-                m->globals[idx].value_type = I32;
-                m->globals[idx].value.uint32 = popStack_u32();
+                //m->globals[idx].value_type = I32;
+                //m->globals[idx].value.uint32 = popStack_u32();
+                global_values[idx] = popStack_u32();
                 continue;
 
             /*
@@ -600,7 +658,8 @@ bool run(Module *m) {
                 addr = popStack_u32();//stack[m->sp--].value.uint32;
 
                 // 获取实际内存地址
-                maddr = m->memory.bytes + offset + addr;
+                ///maddr = m->memory.bytes + offset + addr;
+                maddr = &memory_bufer[offset + addr];
 
                 // TODO: 忽略校验 offset/addr/maddr 值的合法性
 
@@ -739,8 +798,8 @@ bool run(Module *m) {
                 // 再从操作数栈顶弹出一个 i32 类型的数（用于获取实际内存地址）
                 addr = popStack_u32();//stack[m->sp--].value.uint32;
                 // 获取实际内存地址
-                maddr = m->memory.bytes + offset + addr;
-
+                //maddr = m->memory.bytes + offset + addr;
+                maddr = &memory_bufer[offset + addr];
                 // TODO: 忽略校验 offset/addr/maddr 值的合法性
 
                 // 根据具体指令将数操作数栈顶值拷贝到实际内存地址
@@ -808,7 +867,7 @@ bool run(Module *m) {
                 // 将当前的内存页数以 i32 类型压入操作数栈顶
                 //stack[++m->sp].value_type = I32;
                 //stack[m->sp].value.uint32 = m->memory.cur_size;
-                pushStack_u32(m->memory.cur_size);
+                pushStack_u32(memory_cur_size);
                 continue;
 
             /*
@@ -822,7 +881,7 @@ bool run(Module *m) {
                 //read_LEB_unsigned(bytes, &m->pc, 32);
                 readPC_LEB_u32();
                 // 先保存当前内存页数
-                uint32_t prev_pages = m->memory.cur_size;
+                uint32_t prev_pages = memory_cur_size;//m->memory.cur_size;
 
                 // 将操作数栈顶值作为内存要增长的页数
                 uint32_t delta = popStack_u32();//stack[m->sp].value.uint32;
@@ -832,7 +891,7 @@ bool run(Module *m) {
                 pushStack_u32(prev_pages);
 
                 // 校验内存增长页数是否合法
-                if (delta == 0 || delta + prev_pages > m->memory.max_size) {
+                if (delta == 0 || delta + prev_pages > MAX_MEMORY_SIZE) {
                     // 如果内存增长页数为 0，
                     // 或者内存增长页数加上当前内存页数后，超过了内存最大页数，
                     // 则什么都不做，执行下一条指令
@@ -840,8 +899,8 @@ bool run(Module *m) {
                 }
 
                 // 如果内存增长页数合法，则增加 delta 页内存
-                m->memory.cur_size += delta;
-                m->memory.bytes = arecalloc(m->memory.bytes, prev_pages * PAGE_SIZE, m->memory.cur_size * PAGE_SIZE, sizeof(uint8_t), "Module->memory.bytes");
+                memory_cur_size += delta;
+                //m->memory.bytes = arecalloc(m->memory.bytes, prev_pages * PAGE_SIZE, m->memory.cur_size * PAGE_SIZE, sizeof(uint8_t), "Module->memory.bytes");
                 continue;
 
             /*

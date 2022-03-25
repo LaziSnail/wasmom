@@ -1,5 +1,6 @@
 #include "stack.h"
 #include "module.h"
+#include "port.h"
 
 
 static uint32_t stack[STACK_SIZE];
@@ -133,7 +134,7 @@ void localToStackTop(uint32_t index){
             //index--;
         }
     }
-
+    DEBUG_PRINTF("fp is %x.\r\n",fp);
     if ((stackType[fp + realIndex] == STACK_TYPE_F64_L)||(stackType[fp + realIndex] == STACK_TYPE_U64_L)){
         sp++;
         stack[sp] = stack[fp + realIndex];
@@ -186,10 +187,13 @@ void stackTopToLocal(uint32_t index, uint8_t pop) {
 
 extern uint32_t getCurrentPC();
 extern void setCurrentPC(uint32_t p);
-void pushFrame(Block *block) {
+void pushFrame(uint32_t block) {
+    uint32_t tmpTypes;
     csp += 1;
     frameStack[csp].block = block;
-    frameStack[csp].sp = sp - (int) block->type->param_count;
+    //frameStack[csp].sp = sp - (int) block->type->param_count;
+    tmpTypes = FLA_read_u32(block + BLOCK_STRUCT_TYPE_ADDRESS_OFFSET);
+    frameStack[csp].sp = sp - (int) FLA_read_u32(tmpTypes + TYPE_STRUCT_PARAM_COUNT_OFFSET);
 
     /* 4. 保存 fp */
 
@@ -203,27 +207,32 @@ void pushFrame(Block *block) {
     // 以便后续该栈帧关联的函数执行完后，返回到调用该函数的地方继续执行后面的指令
     frameStack[csp].ra = getCurrentPC();
     //fp = sp - (int) block->type->param_count + 1;
-    fp = sp - calcVariableSize(block->type->params, block->type->param_count)/4 + 1;
+    //fp = sp - calcVariableSize(block->type->params, block->type->param_count)/4 + 1;
+    DEBUG_PRINTF("Before calc var size, sp = %x.\r\n",sp);
+    fp = sp - calcVariableSize(FLA_read_u32(tmpTypes + TYPE_STRUCT_PARAM_ADDRESS_OFFSET), FLA_read_u32(tmpTypes + TYPE_STRUCT_PARAM_COUNT_OFFSET)/4 + 1)/4;
+    DEBUG_PRINTF("After calc var size, fp = %x.\r\n",fp);
+    
 
-    for (uint32_t i = 0; i < block->local_count; i++) {
-
+    //for (uint32_t i = 0; i < block->local_count; i++) {
+    for (uint32_t i = 0; i < FLA_read_u32(block + BLOCK_STRUCT_LOCAL_COUNT_OFFSET); i++) {
         //sp++;
-        //stack[sp] = 0;//TODO 处理64位数字的情况
-        if (block->locals[i] == I32){
+        tmpTypes = FLA_read_u32(block + BLOCK_STRUCT_LOCAL_ADDRESS_OFFSET);
+        tmpTypes = FLA_read_u32(tmpTypes + i*sizeof(uint32_t));
+        if (tmpTypes == I32){
             pushStack_u32(0);
-        }else if (block->locals[i] == F32){
+        }else if (tmpTypes == F32){
             pushStack_f32(0);
-        }else if (block->locals[i] == I64){
+        }else if (tmpTypes == I64){
             pushStack_u64(0);
-        }else if (block->locals[i] == F64){
+        }else if (tmpTypes == F64){
             pushStack_f64(0);
         }
     }
 }
 
-Block *popFrame(void) {
+uint32_t popFrame(void) {
     /* 1. 弹出调用栈顶 */
-
+    uint32_t tmpTypes;
     // 从调用栈顶中弹出当前栈帧，同时调用栈指针减 1
     Frame *frame = &frameStack[csp];
     csp--;
@@ -231,10 +240,12 @@ Block *popFrame(void) {
     /* 2. 校验控制块的返回值类型 */
 
     // 获取控制帧对应控制块（包含函数）的签名（即控制块的返回值的数量和类型）
-    Type *t = frame->block->type;
+    //Type *t = frame->block->type;
+    tmpTypes = FLA_read_u32(frame->block + BLOCK_STRUCT_TYPE_ADDRESS_OFFSET);
     // 背景知识：目前多返回值提案还没有进入 Wasm 标准，根据当前版本的 Wasm 标准，控制块不能有参数，且最多只能有一个返回值
     // 如果控制块的返回值数量为 1，也就是有一个返回值时，需要对返回值类型进行校验
-    if (t->result_count == 1) {
+    //if (t->result_count == 1) {
+    if (FLA_read_u32(tmpTypes + TYPE_STRUCT_RESULT_COUNT_OFFSET) == 1){
         // 获取当前栈帧的操作数栈顶值，也就是控制块（包含函数）的返回值，
         // 判断其类型和【控制块签名中的返回值类型】是否一致，如果不一致则记录异常信息
         /*试试不检查类型是否影响功能，我觉得应该不影响。   by ljp
@@ -248,7 +259,8 @@ Block *popFrame(void) {
 
     // 因为该栈帧弹出，所以需要恢复该栈帧被压入调用栈前的【操作数栈顶指针】
     // 注：frame->sp 保存的是该栈帧被压入调用栈前的【操作数栈顶指针】
-    if (t->result_count == 1) {
+    //if (t->result_count == 1) {
+    if (FLA_read_u32(tmpTypes + TYPE_STRUCT_RESULT_COUNT_OFFSET) == 1){
         // 背景知识：目前多返回值提案还没有进入 Wasm 标准，根据当前版本的 Wasm 标准，控制块不能有参数，且最多只能有一个返回值
         // 如果控制块有一个返回值，则这个返回值需要压入到恢复后的操作数栈顶，即恢复后的操作数栈长度需要加 1
         // 所以恢复的【操作数栈顶指针值】 是 该栈帧被压入调用栈前的【操作数栈顶指针】再加 1
@@ -272,7 +284,8 @@ Block *popFrame(void) {
     /* 5. 恢复 ra */
 
     // 当控制块类型为函数时，在函数执行完成该栈帧弹出时，需要返回到该函数调用指令的下一条指令继续执行
-    if (frame->block->block_type == 0x00) {
+    //if (frame->block->block_type == 0x00) {
+    if (FLA_read_u8(frame->block + BLOCK_STRUCT_BLOCK_TYPE_OFFSET) == 0){
         // 将函数返回地址赋给程序计数器 pc（记录下一条即将执行的指令的地址）
         setCurrentPC(frame->ra);
     }
@@ -280,12 +293,14 @@ Block *popFrame(void) {
     return frame->block;
 }
 
-uint32_t calcVariableSize(uint32_t *vartyps, uint32_t varcnt){
+uint32_t calcVariableSize(uint32_t vartyps_addr, uint32_t varcnt){
     uint32_t ret = 0;
+    uint32_t vat_type;
     for (;varcnt > 0;varcnt--){
-        if ((*vartyps == I32)||(*vartyps == F32)){
+        vat_type = FLA_read_u32(vartyps_addr + (varcnt-1)*sizeof(uint32_t));
+        if ((vat_type == I32)||(vat_type == F32)){
             ret += 4;
-        }else if ((*vartyps == I64)||(*vartyps == F64)){
+        }else if ((vat_type == I64)||(vat_type == F64)){
             ret += 8;
         }
     }

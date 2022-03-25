@@ -37,14 +37,14 @@ extern char exception[];
 #define ERROR(...) fprintf(stderr, __VA_ARGS__);
 
 // 解码针对无符号整数的 LEB128 编码
-uint64_t read_LEB_unsigned(const uint8_t *bytes, uint32_t *pos, uint32_t maxbits);
+uint64_t read_LEB_unsigned(uint32_t bytes, uint32_t *pos, uint32_t maxbits);
 
 // 解码针对有符号整数的 LEB128 编码
-uint64_t read_LEB_signed(const uint8_t *bytes, uint32_t *pos, uint32_t maxbits);
+uint64_t read_LEB_signed(uint32_t bytes, uint32_t *pos, uint32_t maxbits);
 
 // 从字节数组中读取字符串，其中字节数组的开头 4 个字节用于表示字符串的长度
 // 注：如果参数 result_len 不为 NULL，则会被赋值为字符串的长度
-char *read_string(const uint8_t *bytes, uint32_t *pos, uint32_t *result_len);
+char *read_string(uint32_t bytes, uint32_t *pos, uint32_t *result_len);
 
 // 申请内存
 void *acalloc(size_t nmemb, size_t size, char *name);
@@ -58,8 +58,8 @@ void *arecalloc(void *ptr, size_t old_nmemb, size_t nmemb, size_t size, char *na
 bool resolve_sym(char *filename, char *symbol, void **val, char **err);
 
 // 基于函数签名计算唯一的掩码值
-uint64_t get_type_mask(Type *type);
-
+//uint64_t get_type_mask(Type *type);
+uint64_t get_type_mask(uint32_t type) ;
 // 根据表示该控制块的类型的值（占一个字节），返回控制块的类型（或签名），即控制块的返回值的数量和类型
 // 0x7f 表示有一个 i32 类型返回值、0x7e 表示有一个 i64 类型返回值、0x7d 表示有一个 f32 类型返回值、0x7c 表示有一个 f64 类型返回值、0x40 表示没有返回值
 // 注：目前多返回值提案还没有进入 Wasm 标准，根据当前版本的 Wasm 标准，控制块不能有参数，且最多只能有一个返回值
@@ -157,7 +157,8 @@ double wa_fmin(double a, double b);
 char *value_repr(StackValue *v);
 
 // 通过名称从 Wasm 模块中查找同名的导出项
-void *get_export(Module *m, char *name);
+//void *get_export(Module *m, char *name);
+uint32_t get_export(uint32_t m, char* name);
 
 // 打开文件并将文件映射进内存
 uint8_t *mmap_file(char *path, int *len);

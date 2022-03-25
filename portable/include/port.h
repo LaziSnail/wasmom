@@ -13,11 +13,15 @@ void afree(void * mem);
 
 
 //关于Flash管理
+int FLA_readData(uint8_t*dst, uint32_t address, uint32_t length);
 int FLA_WriteData(uint32_t address, uint8_t*data, uint32_t length);
 uint8_t FLA_read_u8(uint32_t address);
 uint32_t FLA_read_u32(uint32_t address);
 void FLA_write_u8(uint32_t address, uint8_t data);
 void FLA_write_u32(uint32_t address, uint32_t data);
+void FLA_fill_u8(uint32_t address, uint8_t value, uint32_t length);
 
-
+//用于调试的接口
+//void DEBUG_PRINTF(char* fmt, ...);
+#define DEBUG_PRINTF        printf
 #endif

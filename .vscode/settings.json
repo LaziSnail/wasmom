@@ -1,5 +1,13 @@
 {
     "files.associations": {
-        "interpreter.h": "c"
+        "interpreter.h": "c",
+        "*.tcc": "c",
+        "memory": "c",
+        "memory_resource": "c",
+        "fstream": "c",
+        "iosfwd": "c",
+        "new": "c",
+        "sstream": "c",
+        "utility": "c"
     }
 }

@@ -21,8 +21,8 @@ int32_t popStack_i32();
 uint32_t popStack_u32();
 void pushStack_u32(uint32_t v);
 uint32_t getStack_u32(void);
-void pushFrame(Block *block);
-Block *popFrame(void);
+void pushFrame(uint32_t block);
+uint32_t popFrame(void);
 Block *popOnlyCSP(uint32_t deep);
 uint32_t getCurrentCSP(void);
 uint32_t getLocal(uint32_t index);
@@ -34,5 +34,5 @@ int getCurrentSP(void);
 Frame* getCurrentFrame();
 void stackTopToLocal(uint32_t index, uint8_t pop);
 void localToStackTop(uint32_t index);
-uint32_t calcVariableSize(uint32_t *vartyps, uint32_t varcnt);
+uint32_t calcVariableSize(uint32_t vartyps_addr, uint32_t varcnt);
 #endif
